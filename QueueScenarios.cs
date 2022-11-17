@@ -53,6 +53,32 @@ namespace premium_sb_samples
             Console.WriteLine("====== End: Queue - Send Msg with TTL -> Receive it -> print messages======\n");
         }
 
+        public static async Task Q_Large_Msg_Send_ReceiveAsync(string sbConnectionString)
+        {
+            Console.WriteLine("====== Scenario: Queue - Send Msg with TTL -> Receive it -> print messages======\n");
+            int sampleMsgsCount = 2;
+
+            // one day
+            int messageTtl = 86400;
+
+            QueueRunner queueRunner = new QueueRunner(sbConnectionString, Constants.SampleQueueNames.q_large_msg_send_receive, sampleMsgsCount);
+            await queueRunner.CleanUpQueueAsync();
+
+            await queueRunner.SendSampleLargeMessagesAsync(msgTtl: TimeSpan.FromMinutes(messageTtl));
+
+            var sbClient = queueRunner.GetServiceBusClient();
+
+            ServiceBusReceiver receiver = sbClient.CreateReceiver(queueRunner.QueueName);
+
+            await queueRunner.ReceiveLargeMessageAsync(receiver);
+
+            await receiver.DisposeAsync();
+
+            queueRunner.ClearAllCollections();
+
+            Console.WriteLine("====== End: Queue - Send Msg with TTL -> Receive it -> print messages======\n");
+        }
+
         /// <summary>
         /// Notes:
         /// #1 When a msg is in defer state ttl won't apply

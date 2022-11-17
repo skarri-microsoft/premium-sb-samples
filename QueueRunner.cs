@@ -3,6 +3,7 @@ using Azure.Messaging.ServiceBus.Administration;
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading.Tasks;
 
@@ -38,19 +39,20 @@ namespace premium_sb_samples
                 var options = new CreateQueueOptions(queueName)
                 {
                     AutoDeleteOnIdle = TimeSpan.FromDays(7),
-                    DefaultMessageTimeToLive = TimeSpan.FromSeconds(60),
+                    DefaultMessageTimeToLive = TimeSpan.FromMinutes(60),
                     DuplicateDetectionHistoryTimeWindow = TimeSpan.FromMinutes(1),
                     EnableBatchedOperations = true,
                     DeadLetteringOnMessageExpiration = true,
                     EnablePartitioning = false,
                     ForwardDeadLetteredMessagesTo = null,
                     ForwardTo = null,
-                    LockDuration = TimeSpan.FromSeconds(45),
+                    LockDuration = TimeSpan.FromMinutes(5),
                     MaxDeliveryCount = 10,
                     MaxSizeInMegabytes = 2048,
                     RequiresDuplicateDetection = true,
                     RequiresSession = requiresSession,
-                    UserMetadata = "some metadata"
+                    UserMetadata = "some metadata",
+                    MaxMessageSizeInKilobytes=102400
                 };
 
                 options.AuthorizationRules.Add(new SharedAccessAuthorizationRule("allClaims", new[] { AccessRights.Manage, AccessRights.Send, AccessRights.Listen }));
@@ -133,6 +135,37 @@ namespace premium_sb_samples
             }
         }
 
+        // Batch send is not honoring TTL why?
+        public async Task SendSampleLargeMessagesAsync(TimeSpan msgTtl)
+        {
+            var sbClient = GetServiceBusClient();
+
+            ServiceBusSender sender = sbClient.CreateSender(queueName);
+
+
+            Console.WriteLine($"Send to queue:'{sampleMsgsCount}' complete.");
+
+            ServiceBusMessage serviceBusMessage = new ServiceBusMessage();
+            serviceBusMessage.MessageId = System.Guid.NewGuid().ToString();
+            serviceBusMessage.TimeToLive = TimeSpan.FromDays(1);
+            byte[] data = new byte[99 * 1024 * 1024];
+            Random rng = new Random();
+            rng.NextBytes(data);
+            Stopwatch sw = new Stopwatch();
+            sw.Start();
+            serviceBusMessage.Body = new BinaryData(data);
+
+
+            await Task.WhenAny(sender.SendMessageAsync(serviceBusMessage), Task.Delay(TimeSpan.FromMinutes(5)));
+
+            //await sender.SendMessageAsync(serviceBusMessage);
+
+            sw.Stop();
+            Console.WriteLine($"Operation took {(sw.ElapsedMilliseconds)/1000} seconds time to complete it");
+            await sender.DisposeAsync();
+
+        }
+
         public async Task PeekSampleMessagesAsync(ServiceBusReceiver receiver)
         {
             if (peekedMsgs == null) { peekedMsgs = new List<ServiceBusReceivedMessage>(); }
@@ -156,6 +189,30 @@ namespace premium_sb_samples
 
             Console.WriteLine("Receiving messages...");
             receivedMsgs.AddRange(await receiver.ReceiveMessagesAsync(sampleMsgsCount));
+        }
+
+        public async Task ReceiveLargeMessageAsync(ServiceBusReceiver receiver)
+        {
+            ServiceBusReceivedMessage serviceBusReceivedMessage = await receiver.ReceiveMessageAsync(TimeSpan.MaxValue);
+            int numChunks = 99;
+            int chunkSize = 1024 * 1024;
+            int totalSize = numChunks * chunkSize;
+            byte[] output = new byte[totalSize];
+            int totalBytesRead = 0;
+            while (true)
+            {
+                int count = Math.Min(chunkSize, output.Length - totalBytesRead);
+                int bytesRead = await serviceBusReceivedMessage.Body.ToStream().ReadAsync(output, totalBytesRead, count);
+                if (bytesRead == 0)
+                {
+                    break;
+                }
+
+                totalBytesRead += bytesRead;
+            }
+
+            Console.WriteLine("Received message size is: "+ totalBytesRead/(1024*1024));
+
         }
 
         public async Task ReleaseLocksForReceiveedMsgsAsync(ServiceBusReceiver receiver)
