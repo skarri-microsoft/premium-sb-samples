@@ -46,7 +46,7 @@ namespace premium_sb_samples
                     EnablePartitioning = false,
                     ForwardDeadLetteredMessagesTo = null,
                     ForwardTo = null,
-                    LockDuration = TimeSpan.FromMinutes(5),
+                    LockDuration = TimeSpan.FromSeconds(30),
                     MaxDeliveryCount = 10,
                     MaxSizeInMegabytes = 2048,
                     RequiresDuplicateDetection = true,
@@ -128,6 +128,46 @@ namespace premium_sb_samples
                 {
                     messages.Dequeue();
                 }
+                
+                await sender.SendMessagesAsync(messageBatch);
+                Console.WriteLine($"Send to queue:'{sampleMsgsCount}' complete.");
+                await sender.DisposeAsync();
+            }
+        }
+
+        public async Task SendScheduleSampleMessagesAsync(TimeSpan msgAddTimeSpanToUtcNow)
+        {
+            var sbClient = GetServiceBusClient();
+
+            ServiceBusSender sender = sbClient.CreateSender(queueName);
+
+            Queue<ServiceBusMessage> messages = new Queue<ServiceBusMessage>();
+            Console.WriteLine($"Sending {sampleMsgsCount} messages to queue:'{queueName}'...");
+            for (int i = 0; i < sampleMsgsCount; i++)
+            {
+                messages.Enqueue(new ServiceBusMessage($"message body: UTC time: {DateTime.UtcNow} - Item number: {i} ")
+                { MessageId = Guid.NewGuid().ToString(), ScheduledEnqueueTime=DateTime.UtcNow.Add(msgAddTimeSpanToUtcNow) });
+            }
+
+            while (messages.Count > 0)
+            {
+                using ServiceBusMessageBatch messageBatch = await sender.CreateMessageBatchAsync();
+
+                if (messageBatch.TryAddMessage(messages.Peek()))
+                {
+                    messages.Dequeue();
+                }
+                else
+                {
+                    // if the first message can't fit, then it is too large for the batch
+                    throw new Exception($"Message {sampleMsgsCount - messages.Count} is too large and cannot be sent.");
+                }
+
+                // add as many messages as possible to the current batch
+                while (messages.Count > 0 && messageBatch.TryAddMessage(messages.Peek()))
+                {
+                    messages.Dequeue();
+                }
 
                 await sender.SendMessagesAsync(messageBatch);
                 Console.WriteLine($"Send to queue:'{sampleMsgsCount}' complete.");
@@ -175,6 +215,49 @@ namespace premium_sb_samples
             Console.WriteLine("\nPeeking sample messages complete.\n");
         }
 
+        public async Task DeadLetterPeekedSampleMessagesAsync(ServiceBusReceiver receiver)
+        {
+            if (receivedMsgs == null) { receivedMsgs = new List<ServiceBusReceivedMessage>(); }
+
+            Console.WriteLine("Receiving messages...");
+            receivedMsgs.AddRange(await receiver.ReceiveMessagesAsync(sampleMsgsCount));
+
+            if (receivedMsgs != null) {
+                Console.WriteLine($"\nDead lettering: {receivedMsgs.Count} sample messages ...");
+                foreach (var msg in receivedMsgs)
+                {
+                    await receiver.DeadLetterMessageAsync(msg, "Dead lettering a message for test");
+                }
+                Console.WriteLine("\nDead lettering messages complete.\n");
+            }
+        }
+
+        public async Task DeadLetterDeferredSampleMessagesAsync(ServiceBusReceiver receiver)
+        {
+            //ServiceBusReceivedMessage dMsg1 = await receiver.ReceiveDeferredMessageAsync(2);
+
+            if (peekedMsgs == null)
+            {
+                peekedMsgs = new List<ServiceBusReceivedMessage>();
+
+                Console.WriteLine("\nPeeking sample messages ...");
+                peekedMsgs.AddRange(await receiver.PeekMessagesAsync(sampleMsgsCount));
+                Console.WriteLine("\nPeeking sample messages complete.\n");
+           
+                Console.WriteLine($"\nDead lettering: {peekedMsgs.Count} sample messages ...");
+                foreach (var msg in peekedMsgs)
+                {
+                    if (msg.State == ServiceBusMessageState.Deferred)
+                    {
+                        //await receiver.AbandonMessageAsync(msg);
+                        ServiceBusReceivedMessage dMsg = await receiver.ReceiveDeferredMessageAsync(msg.SequenceNumber);
+                        await receiver.DeadLetterMessageAsync(dMsg, "Dead lettering a message for test");
+                    }
+                }
+                Console.WriteLine("\nDead lettering messages complete.\n");
+            }
+        }
+
         public async Task PeekDeadLetterSampleMessagesAsync(ServiceBusReceiver receiver)
         {
             if (peekedDeadLetterMsgs == null) { peekedDeadLetterMsgs = new List<ServiceBusReceivedMessage>(); }
@@ -190,6 +273,7 @@ namespace premium_sb_samples
             Console.WriteLine("Receiving messages...");
             receivedMsgs.AddRange(await receiver.ReceiveMessagesAsync(sampleMsgsCount));
         }
+
 
         public async Task ReceiveLargeMessageAsync(ServiceBusReceiver receiver)
         {
